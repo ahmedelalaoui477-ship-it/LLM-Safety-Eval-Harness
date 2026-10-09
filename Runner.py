@@ -22,7 +22,7 @@ MODELS = {
     "large": "nvidia/nemotron-3-super-120b-a12b",
 }
 SCHEDULE = [(0.0, 2), (1.0, 5)]   # (temperature, how many samples)
-MAX_TOKENS = 4096
+MAX_TOKENS = 8192
 SEED = 42
 DELAY_SECONDS = 2
 MAX_RETRIES = 5
