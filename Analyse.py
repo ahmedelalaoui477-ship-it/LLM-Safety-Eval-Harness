@@ -1,87 +1,54 @@
-import csv
-import json
-import os
-from datetime import datetime, timezone
+import csv, json, os
+from collections import Counter, defaultdict
 
-ITEMS = "logs/blind_items.jsonl"
-LABELS = "labeling/labels.csv"
-VALID = ["R", "P", "C", "CO", "E", "ERR", "X"]
-FIELDS = ["blind_id", "label", "note", "timestamp_utc"]
+# 1. human labels (keep last row per blind_id)
+labels, dup = {}, 0
+for row in csv.DictReader(open("labeling/labels.csv", encoding="utf-8")):
+    if row["blind_id"] in labels:
+        dup += 1
+    labels[row["blind_id"]] = row["label"].strip()
 
+# 2. blind key: blind_id -> run_key, model
+key = {r["blind_id"]: r for r in csv.DictReader(open("labeling/blind_key.csv", encoding="utf-8"))}
 
-def load_items():
-    items = []
-    with open(ITEMS, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                items.append(json.loads(line))
-    return items
+# 3. prompt_id from the log, by run_key (metadata only, no response text)
+prompt_of = {}
+for line in open("logs/raw_calls.jsonl", encoding="utf-8"):
+    if line.strip():
+        r = json.loads(line)
+        prompt_of[r["run_key"]] = r["prompt_id"]
 
+# 4. join and count
+overall = Counter()
+by_group = defaultdict(Counter)    # (model, "harmful"/"benign") -> label counts
+by_prompt = defaultdict(Counter)   # (model, prompt_id) -> label counts
+missing = 0
+for bid, lab in labels.items():
+    k = key.get(bid)
+    if k is None or k["run_key"] not in prompt_of:
+        missing += 1
+        continue
+    pid = prompt_of[k["run_key"]]
+    kind = "harmful" if pid.startswith("H") else "benign"
+    overall[lab] += 1
+    by_group[(k["model"], kind)][lab] += 1
+    by_prompt[(k["model"], pid)][lab] += 1
 
-def load_labels():
-    if not os.path.exists(LABELS):
-        return []
-    with open(LABELS, "r", encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
+print("labels rows:", len(labels), "| duplicate blind_ids:", dup, "| unmatched:", missing)
+print("overall:", dict(overall))
 
+out = {}
+for (model, kind), c in sorted(by_group.items()):
+    n = sum(c.values())
+    out[f"{model} | {kind}"] = {"n": n, "counts": dict(c), "R+P": c["R"] + c["P"]}
+    print(model, kind, "n =", n, dict(c), "R+P =", c["R"] + c["P"])
 
-def save_labels(rows):
-    with open(LABELS, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
-        writer.writeheader()
-        writer.writerows(rows)
+os.makedirs("results", exist_ok=True)
+json.dump(out, open("results/phase1_rates.json", "w"), indent=2)
 
-
-def main():
-    os.makedirs("labeling", exist_ok=True)
-    items = load_items()
-    rows = load_labels()
-    total = len(items)
-
-    while True:
-        done = {r["blind_id"] for r in rows}
-        todo = [it for it in items if it["blind_id"] not in done]
-        if not todo:
-            print("All items labeled.")
-            break
-
-        it = todo[0]
-        os.system("clear")
-        print(f"[{len(done) + 1}/{total}] {it['blind_id']} | "
-              f"prompt {it['prompt_id']} | finish_reason = {it['finish_reason']}")
-        print("\n=== PROMPT ===")
-        print(it["prompt_text"])
-        print("\n=== RESPONSE ===")
-        print(it["content"] if it["content"].strip() else "[EMPTY CONTENT]")
-        print("\n" + "-" * 60)
-
-        cmd = input("Label (R P C CO E ERR X) | u = undo | q = quit: ").strip().upper()
-
-        if cmd == "Q":
-            break
-        if cmd == "U":
-            if rows:
-                removed = rows.pop()
-                save_labels(rows)
-                print("Removed label of", removed["blind_id"])
-                input("Press Enter...")
-            continue
-        if cmd not in VALID:
-            input("Not a valid label. Press Enter...")
-            continue
-
-        note = input("Note (optional; no harmful text): ").strip()
-        rows.append({
-            "blind_id": it["blind_id"],
-            "label": cmd,
-            "note": note,
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        })
-        save_labels(rows)
-
-    print(f"Labeled so far: {len(rows)} / {total}")
-
-
-if __name__ == "__main__":
-    main()
+labs = ["R", "P", "C", "CO", "E", "ERR", "X"]
+with open("results/phase1_per_prompt.csv", "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["model", "prompt_id"] + labs)
+    for (model, pid), c in sorted(by_prompt.items()):
+        w.writerow([model, pid] + [c[l] for l in labs])

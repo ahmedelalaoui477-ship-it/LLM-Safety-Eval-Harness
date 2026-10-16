@@ -2,7 +2,7 @@ import csv
 from collections import Counter
 
 HUMAN = "labeling/labels.csv"
-JUDGE = "labeling/LLM-labels.csv"   # change to your judge file name
+JUDGE = "labeling/LLM-labels.csv"   
 VALID = ["R", "P", "C", "X"]
 
 
@@ -26,7 +26,7 @@ po = agree / n   # observed agreement
 
 h_counts = Counter(human[i] for i in ids)
 j_counts = Counter(judge[i] for i in ids)
-pe = sum((h_counts[l] / n) * (j_counts[l] / n) for l in VALID)   # chance agreement
+pe = sum((h_counts[l] / n) * (j_counts[l] / n) for l in VALID)   
 kappa = (po - pe) / (1 - pe) if pe < 1 else float("nan")
 
 print(f"raw agreement: {po:.3f} ({agree}/{n})")
